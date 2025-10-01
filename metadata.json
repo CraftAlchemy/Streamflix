@@ -1,0 +1,5 @@
+{
+  "name": "Streamflix",
+  "description": "A visually appealing clone of the Tubi.tv streaming service interface, built with React and Tailwind CSS. It features a dynamic hero section, scrollable content carousels for different categories, and a navigation bar with mock authentication links.",
+  "requestFramePermissions": []
+}
