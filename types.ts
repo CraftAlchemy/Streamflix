@@ -109,3 +109,23 @@ export interface InfoPageContent {
   imageUrl: string;
   content: string[];
 }
+
+export interface HeroAdConfig {
+  id: string;
+  enabled: boolean;
+  position: number; // 0-based index
+  backdropUrl: string;
+  title: string;
+  description: string;
+  ctaText: string;
+  linkUrl: string;
+}
+
+export interface HeroAd extends HeroAdConfig {
+  isAd: true;
+}
+
+export interface HeroConfig {
+    contentIds: string[];
+    ads: HeroAdConfig[];
+}

@@ -16,17 +16,18 @@ import AccountPage from './components/AccountPage';
 import { getMockContent } from './services/mockDataService';
 import { getPromotedAds } from './services/mockPromotedAdService';
 import { getBannerAd } from './services/mockBannerAdService';
+import { getHeroConfig } from './services/heroConfigService';
 import { interleaveAdsInContent } from './utils/adUtils';
 import { getTokenBalance, spendTokens } from './services/tokenService';
 import { getUnlockedContent, unlockContent } from './services/unlockedContentService';
 import { getCurrentUser, logout } from './services/authService';
 import { getMyList, toggleMyList } from './services/myListService';
 
-import type { ContentItem, ContentCategory, BannerAd as BannerAdType, Episode, User, InfoPageContent, ContentGridItem } from './types';
+import type { ContentItem, ContentCategory, BannerAd as BannerAdType, Episode, User, InfoPageContent, ContentGridItem, HeroAd } from './types';
 
 function App() {
   const [content, setContent] = useState<ContentCategory[]>([]);
-  const [heroItem, setHeroItem] = useState<ContentItem | null>(null);
+  const [heroCarouselItems, setHeroCarouselItems] = useState<(ContentItem | HeroAd)[]>([]);
   const [playingItem, setPlayingItem] = useState<{ item: ContentItem | Episode; series?: ContentItem } | null>(null);
   const [seriesForEpisodeSelection, setSeriesForEpisodeSelection] = useState<ContentItem | null>(null);
   const [selectedMovie, setSelectedMovie] = useState<ContentItem | null>(null);
@@ -50,26 +51,65 @@ function App() {
   // My List State
   const [myListIds, setMyListIds] = useState<string[]>([]);
 
-  useEffect(() => {
-    setCurrentUser(getCurrentUser()); // Check for logged in user on mount
-
-    const allContent = getMockContent();
+  const loadData = () => {
+    const allContentRaw = getMockContent();
     const promotedAds = getPromotedAds();
-    const contentWithAds = interleaveAdsInContent(allContent, promotedAds);
-    
+    const contentWithAds = interleaveAdsInContent(allContentRaw, promotedAds);
     setContent(contentWithAds);
-    if (allContent.length > 0 && allContent[0].items.length > 0) {
-      const firstContentItem = allContent[0].items.find(item => !('isAd' in item)) as ContentItem;
-      if(firstContentItem) {
-        setHeroItem(firstContentItem);
-      }
+
+    // Set up the hero carousel based on admin config
+    const heroConfig = getHeroConfig();
+    const allContentItems = new Map<string, ContentItem>();
+    allContentRaw.flatMap(c => c.items).forEach(item => {
+        if (!('isAd' in item)) {
+            allContentItems.set(item.id, item);
+        }
+    });
+
+    let heroItems: (ContentItem | HeroAd)[] = heroConfig.contentIds
+        .map(id => allContentItems.get(id))
+        .filter((item): item is ContentItem => !!item);
+
+    if (heroConfig.ads && heroConfig.ads.length > 0) {
+        const enabledAds = heroConfig.ads
+            .filter(ad => ad.enabled)
+            .sort((a, b) => a.position - b.position);
+
+        enabledAds.forEach(adConfig => {
+            const adItem: HeroAd = {
+                ...adConfig,
+                isAd: true,
+            };
+            // Clamp position to be within the bounds of the array
+            const position = Math.max(0, Math.min(heroItems.length, adConfig.position));
+            heroItems.splice(position, 0, adItem);
+        });
     }
+    
+    // Fallback to default if no hero items are configured
+    if (heroItems.length === 0) {
+        const mostPopularCategory = allContentRaw.find(cat => cat.title === 'Most Popular');
+        if (mostPopularCategory) {
+            heroItems = mostPopularCategory.items
+                .filter(item => !('isAd' in item))
+                .slice(0, 5) as ContentItem[];
+        }
+    }
+    
+    setHeroCarouselItems(heroItems);
+    
     setBannerAd(getBannerAd());
     
     // Load user-specific data
     handleTokensUpdated();
     handleContentUnlocked();
     setMyListIds(getMyList());
+  };
+
+
+  useEffect(() => {
+    setCurrentUser(getCurrentUser()); // Check for logged in user on mount
+    loadData();
   }, []);
 
   useEffect(() => {
@@ -79,6 +119,54 @@ function App() {
     }
   }, [activeCategory]);
 
+
+  const displayedContent = useMemo(() => {
+    if (activeCategory === 'Home') {
+      return content;
+    }
+    if (activeCategory === 'TV Shows') {
+      return content
+        .map(category => ({
+          ...category,
+          items: category.items.filter(item => !('isAd' in item) && (item as ContentItem).type === 'Series')
+        }))
+        .filter(category => category.items.length > 0);
+    }
+    if (activeCategory === 'Movies') {
+      return content
+        .map(category => ({
+          ...category,
+          items: category.items.filter(item => !('isAd' in item) && (item as ContentItem).type === 'Movie')
+        }))
+        .filter(category => category.items.length > 0);
+    }
+    if (activeCategory === 'My List') {
+      const allItems = content
+        .flatMap(category => category.items)
+        .filter(item => !('isAd' in item) && myListIds.includes((item as ContentItem).id));
+      
+      const uniqueItems = Array.from(new Map(allItems.map(item => [(item as ContentItem).id, item])).values());
+      
+      if (uniqueItems.length > 0) {
+        return [{ title: 'My List', items: uniqueItems }];
+      }
+      return []; // Return empty array so we can show a message
+    }
+    if (activeCategory === 'Premium') {
+      return content
+        .map(category => ({
+          ...category,
+          items: category.items.filter(item => !('isAd' in item) && (item as ContentItem).isPremium === true)
+        }))
+        .filter(category => category.items.length > 0);
+    }
+    if (activeCategory === 'New & Popular') {
+      return content.filter(category => 
+        category.title === 'Most Popular' || category.title === 'Trending Now'
+      );
+    }
+    return content;
+  }, [content, activeCategory, myListIds]);
 
   const handleTokensUpdated = () => {
     setTokenBalance(getTokenBalance());
@@ -162,12 +250,8 @@ function App() {
     setPlayingItem(null);
   };
   
-  const handleAdsUpdated = () => {
-    const allContent = getMockContent();
-    const promotedAds = getPromotedAds();
-    const contentWithAds = interleaveAdsInContent(allContent, promotedAds);
-    setContent(contentWithAds);
-    setBannerAd(getBannerAd());
+  const handleAdminDataUpdated = () => {
+    loadData();
   }
 
   const handleNavClick = (category: string) => {
@@ -239,63 +323,18 @@ function App() {
     return unlockedContentIds.map(id => allContentItems.get(id)).filter((item): item is ContentItem => !!item);
   }, [unlockedContentIds, content]);
 
-  const displayedContent = useMemo(() => {
-    if (activeCategory === 'Home') {
-      return content;
-    }
-    if (activeCategory === 'TV Shows') {
-      return content
-        .map(category => ({
-          ...category,
-          items: category.items.filter(item => !('isAd' in item) && (item as ContentItem).type === 'Series')
-        }))
-        .filter(category => category.items.length > 0);
-    }
-    if (activeCategory === 'Movies') {
-      return content
-        .map(category => ({
-          ...category,
-          items: category.items.filter(item => !('isAd' in item) && (item as ContentItem).type === 'Movie')
-        }))
-        .filter(category => category.items.length > 0);
-    }
-    if (activeCategory === 'My List') {
-      const allItems = content
-        .flatMap(category => category.items)
-        .filter(item => !('isAd' in item) && myListIds.includes((item as ContentItem).id));
-      
-      const uniqueItems = Array.from(new Map(allItems.map(item => [(item as ContentItem).id, item])).values());
-      
-      if (uniqueItems.length > 0) {
-        return [{ title: 'My List', items: uniqueItems }];
-      }
-      return []; // Return empty array so we can show a message
-    }
-    if (activeCategory === 'Premium') {
-      return content
-        .map(category => ({
-          ...category,
-          items: category.items.filter(item => !('isAd' in item) && (item as ContentItem).isPremium === true)
-        }))
-        .filter(category => category.items.length > 0);
-    }
-    if (activeCategory === 'New & Popular') {
-      return content.filter(category => 
-        category.title === 'Most Popular' || category.title === 'Trending Now'
-      );
-    }
-    return content;
-  }, [content, activeCategory, myListIds]);
-
   const fullPageCategories = ['About Us', 'Careers', 'Press', 'Contact Us', 'Help Center', 'FAQ', 'Terms of Use', 'Privacy Policy', 'Cookie Policy', 'Account', 'Admin Panel'];
   const isFullPageCategoryActive = fullPageCategories.includes(activeCategory);
+
+  const showHeroCategories = ['Home', 'TV Shows', 'Movies', 'Premium', 'New & Popular'];
+  const shouldShowHero = showHeroCategories.includes(activeCategory);
   
   const renderMainContent = () => {
     if (activeCategory === 'Admin Panel' && currentUser?.role === 'admin') {
       return (
         <AdminPanel
           onClose={() => setActiveCategory('Home')}
-          onAdsUpdated={handleAdsUpdated}
+          onAdminDataUpdated={handleAdminDataUpdated}
         />
       );
     }
@@ -381,9 +420,9 @@ function App() {
         onSearch={handleSearch}
       />
       
-      {!isFullPageCategoryActive && activeCategory === 'Home' && heroItem && (
+      {shouldShowHero && !isFullPageCategoryActive && heroCarouselItems.length > 0 && (
         <Hero 
-            item={heroItem} 
+            items={heroCarouselItems} 
             onPlay={handlePlay} 
             unlockedContentIds={unlockedContentIds}
             myListIds={myListIds}
@@ -391,7 +430,7 @@ function App() {
         />
       )}
 
-      <main className={`px-4 md:px-12 ${!isFullPageCategoryActive && activeCategory === 'Home' ? 'mt-8' : 'mt-28'}`}>
+      <main className={`px-4 md:px-12 ${shouldShowHero && heroCarouselItems.length > 0 ? 'mt-8' : 'mt-28'}`}>
         {renderMainContent()}
         {!isFullPageCategoryActive && activeCategory !== 'Search' && bannerAd && <BannerAd ad={bannerAd} />}
       </main>

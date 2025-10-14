@@ -16,9 +16,10 @@ import { getBannerAd, updateBannerAd } from '../services/mockBannerAdService';
 import { getCompanionAds, addCompanionAd, updateCompanionAd, deleteCompanionAd } from '../services/mockCompanionAdService';
 import { getDefaultTokenBalance, setDefaultTokenBalance } from '../services/tokenService';
 import { getTokenPackages, addTokenPackage, updateTokenPackage, deleteTokenPackage } from '../services/tokenPackageService';
+import { getHeroConfig, saveHeroConfig } from '../services/heroConfigService';
 
 import SeriesManagerModal from './SeriesManagerModal';
-import type { PromotedContentAd, ContentCategory, VideoAd, BannerAd, CompanionAd, ContentItem, ContentGridItem, Season, SeriesAd, TokenPackage } from '../types';
+import type { PromotedContentAd, ContentCategory, VideoAd, BannerAd, CompanionAd, ContentItem, ContentGridItem, Season, SeriesAd, TokenPackage, HeroConfig, HeroAdConfig } from '../types';
 import AdPlayer from './AdPlayer';
 import CloseIcon from './icons/CloseIcon';
 import EditIcon from './icons/EditIcon';
@@ -34,18 +35,18 @@ import ListIcon from './icons/ListIcon';
 
 interface AdminPanelProps {
   onClose: () => void;
-  onAdsUpdated: () => void;
+  onAdminDataUpdated: () => void;
 }
 
-type AdminTab = 'promoted' | 'carousels' | 'tv_shows' | 'movies' | 'tv_ads' | 'tokens' | 'settings';
+type AdminTab = 'homepage' | 'promoted' | 'carousels' | 'tv_shows' | 'movies' | 'tv_ads' | 'tokens' | 'settings';
 
 // Type guard to check if an item is a ContentItem
 function isContentItem(item: ContentGridItem): item is ContentItem {
   return !('isAd' in item);
 }
 
-const AdminPanel: React.FC<AdminPanelProps> = ({ onClose, onAdsUpdated }) => {
-  const [activeTab, setActiveTab] = useState<AdminTab>('promoted');
+const AdminPanel: React.FC<AdminPanelProps> = ({ onClose, onAdminDataUpdated }) => {
+  const [activeTab, setActiveTab] = useState<AdminTab>('homepage');
   const [showSuccess, setShowSuccess] = useState(false);
 
   // State for Promoted Ads
@@ -72,6 +73,11 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ onClose, onAdsUpdated }) => {
   // State for Token Management
   const [initialTokenBalance, setInitialTokenBalance] = useState(100);
   const [tokenPackages, setTokenPackages] = useState<TokenPackage[]>([]);
+  
+  // State for Homepage (Hero)
+  const [heroConfig, setHeroConfig] = useState<HeroConfig>(getHeroConfig());
+  const [isHeroAdFormOpen, setIsHeroAdFormOpen] = useState(false);
+  const [editingHeroAd, setEditingHeroAd] = useState<HeroAdConfig | null>(null);
 
 
   // State for Ad Settings
@@ -97,6 +103,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ onClose, onAdsUpdated }) => {
     setSeriesAds(getSeriesAds());
     setInitialTokenBalance(getDefaultTokenBalance());
     setTokenPackages(getTokenPackages());
+    setHeroConfig(getHeroConfig());
   }, []);
   
   const showSuccessMessage = () => {
@@ -117,7 +124,8 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ onClose, onAdsUpdated }) => {
     setSeriesAds(getSeriesAds());
     setInitialTokenBalance(getDefaultTokenBalance());
     setTokenPackages(getTokenPackages());
-    onAdsUpdated();
+    setHeroConfig(getHeroConfig());
+    onAdminDataUpdated();
     showSuccessMessage();
   }
 
@@ -264,8 +272,45 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ onClose, onAdsUpdated }) => {
     refreshAllData();
   }
   
+  // --- Homepage / Hero Logic ---
+  const handleAddHeroAd = () => {
+    setEditingHeroAd(null);
+    setIsHeroAdFormOpen(true);
+  };
+
+  const handleEditHeroAd = (ad: HeroAdConfig) => {
+    setEditingHeroAd(ad);
+    setIsHeroAdFormOpen(true);
+  };
+
+  const handleDeleteHeroAd = (adId: string) => {
+    if (window.confirm('Are you sure you want to delete this hero ad?')) {
+        setHeroConfig(prev => ({
+            ...prev,
+            ads: prev.ads.filter(ad => ad.id !== adId)
+        }));
+    }
+  };
+
+  const handleSaveHeroAd = (adData: HeroAdConfig) => {
+    setHeroConfig(prev => {
+        const newAds = [...prev.ads];
+        const existingIndex = newAds.findIndex(ad => ad.id === adData.id);
+
+        if (existingIndex > -1) {
+            newAds[existingIndex] = adData;
+        } else {
+            newAds.push(adData);
+        }
+        return { ...prev, ads: newAds };
+    });
+    setIsHeroAdFormOpen(false);
+  };
+
+  
   const renderTabContent = () => {
     switch(activeTab) {
+        case 'homepage': return renderHomepageSettings();
         case 'promoted': return renderPromotedAds();
         case 'carousels': return renderCarousels();
         case 'tv_shows': return renderContentManagement('Series');
@@ -275,6 +320,106 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ onClose, onAdsUpdated }) => {
         case 'settings': return renderAdSettings();
     }
   }
+
+  const renderHomepageSettings = () => {
+    const selectedItems = heroConfig.contentIds.map(id => allContentItems.find(item => item.id === id)).filter((item): item is ContentItem => !!item);
+    const availableItems = allContentItems.filter(item => !heroConfig.contentIds.includes(item.id));
+    const MAX_HERO_ITEMS = 10;
+    
+    const handleToggleHeroItem = (itemId: string) => {
+        setHeroConfig(prev => {
+            const isSelected = prev.contentIds.includes(itemId);
+            if (isSelected) {
+                return { ...prev, contentIds: prev.contentIds.filter(id => id !== itemId) };
+            } else {
+                if (prev.contentIds.length >= MAX_HERO_ITEMS) {
+                    alert(`You can select a maximum of ${MAX_HERO_ITEMS} items for the hero carousel.`);
+                    return prev;
+                }
+                return { ...prev, contentIds: [...prev.contentIds, itemId] };
+            }
+        });
+    };
+
+    const handleReorderHeroItem = (index: number, direction: 'up' | 'down') => {
+        const newIndex = direction === 'up' ? index - 1 : index + 1;
+        if (newIndex < 0 || newIndex >= heroConfig.contentIds.length) return;
+
+        setHeroConfig(prev => {
+            const newContentIds = [...prev.contentIds];
+            const [removed] = newContentIds.splice(index, 1);
+            newContentIds.splice(newIndex, 0, removed);
+            return { ...prev, contentIds: newContentIds };
+        });
+    };
+
+    const handleSaveHomepage = () => {
+        saveHeroConfig(heroConfig);
+        refreshAllData();
+    }
+
+    return (
+        <div className="space-y-8">
+            <div className="bg-gray-800 p-4 rounded-lg">
+                <h3 className="text-lg font-semibold mb-4">Hero Content Selection ({heroConfig.contentIds.length}/{MAX_HERO_ITEMS})</h3>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                        <h4 className="font-semibold text-sm mb-2 text-gray-300">Available Content</h4>
+                        <div className="bg-gray-700 p-2 rounded-md h-64 overflow-y-auto space-y-1">
+                            {availableItems.map(item => (
+                                <button key={item.id} onClick={() => handleToggleHeroItem(item.id)} className="w-full text-left p-1.5 bg-gray-600 hover:bg-gray-500 rounded text-xs truncate">
+                                    {item.title} ({item.type})
+                                </button>
+                            ))}
+                        </div>
+                    </div>
+                    <div>
+                        <h4 className="font-semibold text-sm mb-2 text-gray-300">Selected for Hero</h4>
+                        <div className="bg-gray-700 p-2 rounded-md h-64 overflow-y-auto space-y-1">
+                           {selectedItems.map((item, index) => (
+                                <div key={item.id} className="group flex items-center justify-between p-1.5 bg-gray-800 rounded">
+                                    <span onClick={() => handleToggleHeroItem(item.id)} className="text-xs truncate cursor-pointer flex-grow">{item.title}</span>
+                                    <div className="flex items-center space-x-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                                        <button onClick={() => handleReorderHeroItem(index, 'up')} disabled={index === 0} className="disabled:opacity-20 hover:text-green-400"><ArrowUpIcon /></button>
+                                        <button onClick={() => handleReorderHeroItem(index, 'down')} disabled={index === selectedItems.length - 1} className="disabled:opacity-20 hover:text-green-400"><ArrowDownIcon /></button>
+                                    </div>
+                                </div>
+                           ))}
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div className="bg-gray-800 p-4 rounded-lg">
+                <h3 className="text-lg font-semibold mb-4">Hero Advertisements</h3>
+                <div className="space-y-2 mb-4">
+                    {heroConfig.ads.map(ad => (
+                        <div key={ad.id} className="bg-gray-700 p-2 rounded flex items-center justify-between">
+                            <div>
+                                <p className="font-medium">{ad.title}</p>
+                                <p className="text-xs text-gray-400">
+                                    Position: {ad.position} | {ad.enabled ? 'Enabled' : 'Disabled'}
+                                </p>
+                            </div>
+                            <div className="flex items-center space-x-2">
+                                <button onClick={() => handleEditHeroAd(ad)} className="hover:text-yellow-400"><EditIcon /></button>
+                                <button onClick={() => handleDeleteHeroAd(ad.id)} className="hover:text-red-500"><TrashIcon /></button>
+                            </div>
+                        </div>
+                    ))}
+                    {heroConfig.ads.length === 0 && <p className="text-sm text-gray-500 text-center">No hero ads configured.</p>}
+                </div>
+                <button onClick={handleAddHeroAd} className="w-full py-2 px-4 bg-red-800 rounded hover:bg-red-700 flex items-center justify-center">
+                    <PlusIcon /> <span className="ml-2">Add New Hero Ad</span>
+                </button>
+            </div>
+            
+            <button onClick={handleSaveHomepage} className="w-full py-2 px-4 bg-red-600 rounded hover:bg-red-700 flex items-center justify-center">
+                Save Homepage Settings
+            </button>
+        </div>
+    );
+  };
   
   const renderPromotedAds = () => (
     <>
@@ -568,6 +713,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ onClose, onAdsUpdated }) => {
             <div className="sticky top-[72px] z-10 bg-gray-900 mb-6 -mx-4 md:-mx-12 px-4 md:px-12">
                 <div className="border-b border-gray-700">
                     <div className="flex overflow-x-auto whitespace-nowrap -mb-px">
+                        <button onClick={() => setActiveTab('homepage')} className={`py-3 px-4 flex-shrink-0 font-medium text-sm ${activeTab === 'homepage' ? 'border-b-2 border-red-500 text-white' : 'text-gray-400 hover:text-white border-b-2 border-transparent'}`}>Homepage</button>
                         <button onClick={() => setActiveTab('promoted')} className={`py-3 px-4 flex-shrink-0 font-medium text-sm ${activeTab === 'promoted' ? 'border-b-2 border-red-500 text-white' : 'text-gray-400 hover:text-white border-b-2 border-transparent'}`}>Promoted Ads</button>
                         <button onClick={() => setActiveTab('carousels')} className={`py-3 px-4 flex-shrink-0 font-medium text-sm ${activeTab === 'carousels' ? 'border-b-2 border-red-500 text-white' : 'text-gray-400 hover:text-white border-b-2 border-transparent'}`}>Carousels</button>
                         <button onClick={() => setActiveTab('tv_shows')} className={`py-3 px-4 flex-shrink-0 font-medium text-sm ${activeTab === 'tv_shows' ? 'border-b-2 border-red-500 text-white' : 'text-gray-400 hover:text-white border-b-2 border-transparent'}`}>TV Shows</button>
@@ -643,6 +789,15 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ onClose, onAdsUpdated }) => {
                     <p className="text-center mt-2 text-sm text-gray-300">{previewingCompanionAd.altText}</p>
                 </div>
             </div>
+        )}
+
+        {isHeroAdFormOpen && (
+            <HeroAdFormModal
+                ad={editingHeroAd}
+                onClose={() => setIsHeroAdFormOpen(false)}
+                onSave={handleSaveHeroAd}
+                currentListSize={heroConfig.contentIds.length + heroConfig.ads.length}
+            />
         )}
     </>
   );
@@ -797,6 +952,73 @@ const ContentItemForm: React.FC<ContentItemFormProps> = ({ itemToEdit, itemType,
     );
 };
 
+
+// --- Hero Ad Form Modal Component ---
+interface HeroAdFormModalProps {
+    ad: HeroAdConfig | null;
+    onClose: () => void;
+    onSave: (adData: HeroAdConfig) => void;
+    currentListSize: number;
+}
+
+const HeroAdFormModal: React.FC<HeroAdFormModalProps> = ({ ad, onClose, onSave, currentListSize }) => {
+    const emptyAd: Omit<HeroAdConfig, 'id'> = {
+        enabled: true, position: 0, backdropUrl: '', title: '', description: '', ctaText: 'Learn More', linkUrl: ''
+    };
+    const [formData, setFormData] = useState(ad || emptyAd);
+
+    const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
+        const { name, value, type } = e.target;
+        
+        let processedValue: any = value;
+        if (type === 'checkbox') {
+             processedValue = (e.target as HTMLInputElement).checked;
+        } else if (type === 'number') {
+            processedValue = parseInt(value, 10) || 0;
+        }
+
+        setFormData(prev => ({ ...prev, [name]: processedValue } as Omit<HeroAdConfig, 'id'>));
+    };
+
+    const handleSubmit = (e: React.FormEvent) => {
+        e.preventDefault();
+        const finalData = {
+            ...formData,
+            id: ad?.id || `hero-ad-${Date.now()}`
+        };
+        onSave(finalData);
+    };
+
+    return (
+        <div className="fixed inset-0 bg-black bg-opacity-80 z-[120] flex items-center justify-center p-4">
+            <div className="bg-gray-800 rounded-lg shadow-xl w-full max-w-lg max-h-[90vh] flex flex-col">
+                <div className="flex justify-between items-center p-4 border-b border-gray-700">
+                    <h3 className="text-lg font-semibold">{ad ? 'Edit' : 'Add'} Hero Ad</h3>
+                    <button onClick={onClose}><CloseIcon /></button>
+                </div>
+                <form onSubmit={handleSubmit} className="p-4 space-y-3 overflow-y-auto">
+                     <label className="flex items-center space-x-2 text-sm cursor-pointer">
+                        <input type="checkbox" name="enabled" checked={formData.enabled} onChange={handleChange} className="form-checkbox h-5 w-5 bg-gray-700 border-gray-500 text-red-600 focus:ring-red-500 rounded" />
+                        <span>Enable this ad in the hero carousel</span>
+                    </label>
+                    <div>
+                        <label className="block text-xs text-gray-400">Position (0 = first)</label>
+                        <input type="number" name="position" value={formData.position} onChange={handleChange} min="0" max={currentListSize} className="w-full mt-1 p-2 bg-gray-700 rounded" />
+                    </div>
+                    <input type="url" name="backdropUrl" value={formData.backdropUrl} onChange={handleChange} placeholder="Backdrop Image URL" required className="w-full p-2 bg-gray-700 rounded" />
+                    <input type="text" name="title" value={formData.title} onChange={handleChange} placeholder="Title" required className="w-full p-2 bg-gray-700 rounded" />
+                    <textarea name="description" value={formData.description} onChange={handleChange} placeholder="Description" required className="w-full p-2 bg-gray-700 rounded" />
+                    <input type="text" name="ctaText" value={formData.ctaText} onChange={handleChange} placeholder="Button Text (e.g., Learn More)" required className="w-full p-2 bg-gray-700 rounded" />
+                    <input type="url" name="linkUrl" value={formData.linkUrl} onChange={handleChange} placeholder="Button Link URL" required className="w-full p-2 bg-gray-700 rounded" />
+                    <div className="flex justify-end space-x-2 pt-2">
+                        <button type="button" onClick={onClose} className="py-2 px-4 bg-gray-600 rounded hover:bg-gray-500">Cancel</button>
+                        <button type="submit" className="py-2 px-4 bg-red-600 rounded hover:bg-red-700">{ad ? 'Save Changes' : 'Add Ad'}</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    );
+};
 
 // Reusable component for managing a list of video ads
 interface AdManagementSectionProps {
